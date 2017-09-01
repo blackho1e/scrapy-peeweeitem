@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from peewee import CompositeKey
 from scrapy.item import Field, Item, ItemMeta
 from six import with_metaclass
 
@@ -10,31 +11,23 @@ class PeeweeItemMeta(ItemMeta):
         cls = super(PeeweeItemMeta, mcs).__new__(mcs, class_name, bases, attrs)
         cls.fields = cls.fields.copy()
         cls._models = []
-
         for model in cls.db_models:
-            primary_keys = self._get_primary_keys(model)
-            lookup =
-            item = {
-                'database': model._meta.database,
-                'model': model,
-                'primary_keys': primary_keys,
-            }
+            item = dict(db_model=model)
             fields = []
             for field in model._meta.fields:
                 fields.append(field)
                 if field not in cls.fields:
-                    cls.fields[field] = TextField()
+                    cls.fields[field] = Field()
             item['fields'] = fields
+            item['primary_keys'] = mcs._get_primary_keys(mcs, model)
             cls._models.append(item)
         return cls
 
     def _get_primary_keys(self, model):
-        pk = model._meta.primary_key
-        if "field_names" in pk.__dict__:
-            names = pk.field_names
-        else:
-            names = (pk.name,)
-        return names
+        meta = model._meta
+        pk = meta.primary_key
+        return pk.field_names if isinstance(pk, CompositeKey) else [f.name for f in meta.sorted_fields if f.primary_key]
+
 
 class PeeweeItem(with_metaclass(PeeweeItemMeta, Item)):
 
@@ -42,28 +35,26 @@ class PeeweeItem(with_metaclass(PeeweeItemMeta, Item)):
 
     def __init__(self, *args, **kwargs):
         super(PeeweeItem, self).__init__(*args, **kwargs)
-        self._instance = None
-        for k, v in self.fields.iteritems():
-            if v:
-                self[k] = v.get('default', None)
+        self._instance = {}
 
     def instance(self, model):
-        if self._instance is None:
-            primary_keys = model['primary_keys']
+        db_model = model['db_model']
+        if self._instance.get(db_model._meta.name) is None:
             fields = model['fields']
-
-            lookup = {}
-            for key in primary_keys:
-                lookup[key] = item[key]
-
-            # modelargs = dict((k, self.get(k)) for k in self._values if k in fields)
-            # db_model = model['model']
-            # self._instance = db_model.create(**modelargs)
-            _instance, created = cls.get_or_create(**lookup)
-            for key, value in item.iteritems():
-                setattr(_instance, key, value)
-        return self._instance
+            primary_keys = model['primary_keys']
+            args = dict((k, self.get(k)) for k in self._values if k in primary_keys)
+            items = dict((k, self.get(k)) for k in self._values if k in fields)
+            if args:
+                instance = db_model.get_or_create(**args)[0]
+                for k, v in items.items():
+                    setattr(instance, k, v)
+            else:
+                instance = db_model.create(**items)
+            self._instance[db_model._meta.name] = instance
+            return instance
+        return None
 
     def save(self):
         for model in self._models:
             self.instance(model).save()
+
