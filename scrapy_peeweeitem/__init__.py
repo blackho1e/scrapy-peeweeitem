@@ -28,7 +28,6 @@ class PeeweeItemMeta(ItemMeta):
         pk = meta.primary_key
         return pk.field_names if isinstance(pk, CompositeKey) else [f.name for f in meta.sorted_fields if f.primary_key]
 
-
 class PeeweeItem(with_metaclass(PeeweeItemMeta, Item)):
 
     db_models = []
@@ -42,19 +41,21 @@ class PeeweeItem(with_metaclass(PeeweeItemMeta, Item)):
         if self._instance.get(db_model._meta.name) is None:
             fields = model['fields']
             primary_keys = model['primary_keys']
-            args = dict((k, self.get(k)) for k in self._values if k in primary_keys)
-            items = dict((k, self.get(k)) for k in self._values if k in fields)
+            args = dict((k, self.get(k, None)) for k in self._values if k in primary_keys and self.get(k))
+            values = dict((k, self.get(k, None)) for k in self._values if k in fields and self.get(k))
             if args:
                 instance = db_model.get_or_create(**args)[0]
-                for k, v in items.items():
+                for k, v in values.items():
                     setattr(instance, k, v)
             else:
-                instance = db_model.create(**items)
+                instance = db_model.create(**values)
             self._instance[db_model._meta.name] = instance
             return instance
         return None
 
-    def save(self):
+    def save(self, excludes=[]):
         for model in self._models:
-            self.instance(model).save()
+            db_model = model['db_model']
+            if db_model not in excludes:
+                self.instance(model).save()
 
